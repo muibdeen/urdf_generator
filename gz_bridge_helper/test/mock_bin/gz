@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# A stand-in for `gz topic -e -t TOPIC -n 1`: succeeds (printing nothing, like a message whose
+# fields are all zero) once the mock `ros2 topic pub` has published something.
+state="${GZBH_MOCK_STATE:?GZBH_MOCK_STATE is not set}"
+echo "gz $*" >> "$state/calls.log"
+[ -e "$state/gz_missing" ] && { echo "exec: gz: not found" >&2; exit 127; }
+topic=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "-t" ] && topic="$2"
+  shift
+done
+trap 'exit 1' INT TERM
+for i in $(seq 1 100); do
+  if grep -qx "$topic" "$state/gz_deaf" 2>/dev/null; then sleep 0.1; continue; fi
+  if ls "$state/pub"/* >/dev/null 2>&1; then exit 0; fi
+  sleep 0.1
+done
+exit 1

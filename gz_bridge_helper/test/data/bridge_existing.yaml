@@ -1,0 +1,29 @@
+# A bridge configuration written by hand: one useful entry, then entries ros_gz_bridge would skip.
+- ros_topic_name: /cmd_vel
+  gz_topic_name: /my_own/cmd_vel
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
+
+- topic_name: /battery
+  ros_type_name: sensor_msgs/msg/BatteryState
+  gz_type_name: gz.msgs.BatteryState
+  direction: GZ_TO_ROS
+  lazzy: true
+
+- topic_name: /bad_direction
+  ros_type_name: std_msgs/msg/String
+  gz_type_name: gz.msgs.StringMsg
+  direction: SIDEWAYS
+
+- topic_name: /no_gz_type
+  ros_type_name: std_msgs/msg/String
+
+- topic_name: /mismatch
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.Twist
+
+- topic_name: /both
+  ros_topic_name: /both
+  ros_type_name: std_msgs/msg/String
+  gz_type_name: gz.msgs.StringMsg

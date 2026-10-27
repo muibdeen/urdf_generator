@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A stand-in for `colcon build --packages-select PKG`: succeeds when the package was written to
+# src/PKG, and then creates install/setup.bash.
+state="${GZBH_MOCK_STATE:?GZBH_MOCK_STATE is not set}"
+echo "colcon $* (in $(pwd))" >> "$state/calls.log"
+pkg="$3"
+if [ -e "$state/build_fail" ] || [ ! -f "src/$pkg/package.xml" ]; then
+  echo "Starting >>> $pkg"
+  echo "Failed   <<< $pkg [0.5s, exited with code 2]"
+  exit 1
+fi
+mkdir -p install
+echo 'export GZBH_MOCK_SOURCED=1' > install/setup.bash
+echo "Starting >>> $pkg"
+echo "Finished <<< $pkg [0.5s]"
+echo "Summary: 1 package finished"
+exit 0

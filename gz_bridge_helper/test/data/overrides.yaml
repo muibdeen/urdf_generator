@@ -1,0 +1,42 @@
+package_name: tiny_sim
+model_name: tiny
+use_sim_time: true
+
+world:
+  name: lab
+  step_size: 0.002
+  gravity: [0.0, 0.0, -9.81]
+  spherical_coordinates:
+    latitude: 48.8566
+    longitude: 2.3522
+    elevation: 35.0
+    heading: 90.0
+
+spawn:
+  x: 1.0
+  y: -2.0
+  z: 0.3
+  yaw: 1.57
+
+sensors:
+  front_camera:
+    ros_topic: /cam/rgb
+  laser:
+    ros_topic: /scan
+    update_rate: 20.0
+    samples: 720
+    range_min: 0.2
+    range_max: 20.0
+  body_imu:
+    enabled: false
+
+drive:
+  ros_cmd_vel_topic: /robot/cmd_vel
+  ros_odom_topic: /robot/odom
+  max_linear_velocity: 1.5
+  max_angular_velocity: 2.5
+
+joints:
+  state_publisher: true
+
+exclude: [/tf]

@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!-- A small differential-drive robot, written by hand for the tests of gz_bridge_helper. -->
+<robot name="diffbot">
+  <link name="base_link">
+    <visual><geometry><box size="0.4 0.2 0.1"/></geometry></visual>
+    <collision><geometry><box size="0.4 0.2 0.1"/></geometry></collision>
+    <inertial><mass value="5.0"/><inertia ixx="0.03" ixy="0" ixz="0" iyy="0.07" iyz="0" izz="0.09"/></inertial>
+  </link>
+
+  <link name="left_wheel_link">
+    <visual><origin rpy="1.5707963 0 0"/><geometry><cylinder radius="0.05" length="0.03"/></geometry></visual>
+    <collision><origin rpy="1.5707963 0 0"/><geometry><cylinder radius="0.05" length="0.03"/></geometry></collision>
+    <inertial><mass value="0.4"/><inertia ixx="0.0005" ixy="0" ixz="0" iyy="0.0005" iyz="0" izz="0.0005"/></inertial>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="left_wheel_link"/>
+    <origin xyz="0 0.12 0"/><axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="right_wheel_link">
+    <visual><origin rpy="1.5707963 0 0"/><geometry><cylinder radius="0.05" length="0.03"/></geometry></visual>
+    <collision><origin rpy="1.5707963 0 0"/><geometry><cylinder radius="0.05" length="0.03"/></geometry></collision>
+    <inertial><mass value="0.4"/><inertia ixx="0.0005" ixy="0" ixz="0" iyy="0.0005" iyz="0" izz="0.0005"/></inertial>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="right_wheel_link"/>
+    <origin xyz="0 -0.12 0"/><axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="caster_link">
+    <visual><geometry><sphere radius="0.025"/></geometry></visual>
+    <collision><geometry><sphere radius="0.025"/></geometry></collision>
+    <inertial><mass value="0.1"/><inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/></inertial>
+  </link>
+  <joint name="caster_joint" type="fixed">
+    <parent link="base_link"/><child link="caster_link"/>
+    <origin xyz="-0.15 0 -0.025"/>
+  </joint>
+
+  <ros2_control name="diffbot_system" type="system">
+    <hardware><plugin>mock_components/GenericSystem</plugin></hardware>
+    <joint name="left_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>
