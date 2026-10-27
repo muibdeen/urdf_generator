@@ -1,0 +1,273 @@
+// Copyright 2026. Licensed under the Apache License, Version 2.0.
+#include "urdf_generator/emitter.hpp"
+
+#include <set>
+#include <sstream>
+
+namespace urdfgen {
+namespace {
+
+struct Mode {
+  bool xacro;
+  std::string n(const Num& v) const { return xacro ? v.xacro() : v.urdf(); }
+};
+
+class Writer {
+ public:
+  void line(const std::string& s) {
+    for (int i = 0; i < depth_; ++i) os_ << "  ";
+    os_ << s << "\n";
+  }
+  void blank() { os_ << "\n"; }
+  void open(const std::string& s) { line(s); ++depth_; }
+  void close(const std::string& s) { --depth_; line(s); }
+  void indent(int d) { depth_ += d; }
+  std::string str() const { return os_.str(); }
+
+ private:
+  std::ostringstream os_;
+  int depth_ = 0;
+};
+
+std::string triple(const Mode& m, const Num& a, const Num& b, const Num& c) {
+  return m.n(a) + " " + m.n(b) + " " + m.n(c);
+}
+
+std::string originTag(const Mode& m, const Origin& o) {
+  if (o.isIdentity()) return "";
+  return "<origin xyz=\"" + triple(m, o.x, o.y, o.z) + "\" rpy=\"" +
+         triple(m, o.roll, o.pitch, o.yaw) + "\"/>";
+}
+
+std::string geometryTag(const Mode& m, const Geometry& g) {
+  switch (g.kind) {
+    case Geometry::Kind::Box:
+      return "<box size=\"" + triple(m, g.a, g.b, g.c) + "\"/>";
+    case Geometry::Kind::Cylinder:
+      return "<cylinder radius=\"" + m.n(g.a) + "\" length=\"" + m.n(g.b) + "\"/>";
+    case Geometry::Kind::Sphere:
+      return "<sphere radius=\"" + m.n(g.a) + "\"/>";
+  }
+  return "";
+}
+
+std::string inertiaMacroCall(const Mode& m, const Link& l) {
+  const auto& g = l.geometry;
+  switch (g.kind) {
+    case Geometry::Kind::Box:
+      return "<xacro:box_inertia m=\"" + m.n(l.mass) + "\" x=\"" + m.n(g.a) + "\" y=\"" +
+             m.n(g.b) + "\" z=\"" + m.n(g.c) + "\"/>";
+    case Geometry::Kind::Cylinder:
+      return "<xacro:cylinder_inertia m=\"" + m.n(l.mass) + "\" r=\"" + m.n(g.a) + "\" h=\"" +
+             m.n(g.b) + "\"/>";
+    case Geometry::Kind::Sphere:
+      return "<xacro:sphere_inertia m=\"" + m.n(l.mass) + "\" r=\"" + m.n(g.a) + "\"/>";
+  }
+  return "";
+}
+
+std::string inertiaTag(const Link& l) {
+  const InertiaTensor t = computeInertia(l);
+  return "<inertia ixx=\"" + Num::format(t.ixx) + "\" ixy=\"0\" ixz=\"0\" iyy=\"" +
+         Num::format(t.iyy) + "\" iyz=\"0\" izz=\"" + Num::format(t.izz) + "\"/>";
+}
+
+void emitLink(Writer& w, const Mode& m, const Link& l) {
+  if (!l.hasBody) {
+    w.line("<link name=\"" + l.name + "\"/>");
+    return;
+  }
+  const std::string org = originTag(m, l.origin);
+  const std::string geom = geometryTag(m, l.geometry);
+  w.open("<link name=\"" + l.name + "\">");
+
+  w.open("<visual>");
+  if (!org.empty()) w.line(org);
+  w.open("<geometry>");
+  w.line(geom);
+  w.close("</geometry>");
+  if (!l.material.empty()) w.line("<material name=\"" + l.material + "\"/>");
+  w.close("</visual>");
+
+  w.open("<collision>");
+  if (!org.empty()) w.line(org);
+  w.open("<geometry>");
+  w.line(geom);
+  w.close("</geometry>");
+  w.close("</collision>");
+
+  w.open("<inertial>");
+  if (!org.empty()) w.line(org);
+  w.line("<mass value=\"" + m.n(l.mass) + "\"/>");
+  w.line(m.xacro ? inertiaMacroCall(m, l) : inertiaTag(l));
+  w.close("</inertial>");
+
+  w.close("</link>");
+}
+
+const char* jointTypeName(JointType t) {
+  switch (t) {
+    case JointType::Fixed: return "fixed";
+    case JointType::Revolute: return "revolute";
+    case JointType::Continuous: return "continuous";
+    case JointType::Prismatic: return "prismatic";
+  }
+  return "fixed";
+}
+
+void emitJoint(Writer& w, const Mode& m, const Joint& j) {
+  w.open("<joint name=\"" + j.name + "\" type=\"" + jointTypeName(j.type) + "\">");
+  w.line("<parent link=\"" + j.parent + "\"/>");
+  w.line("<child link=\"" + j.child + "\"/>");
+  const std::string org = originTag(m, j.origin);
+  if (!org.empty()) w.line(org);
+  if (j.type != JointType::Fixed) {
+    w.line("<axis xyz=\"" + Num::format(j.axis[0]) + " " + Num::format(j.axis[1]) + " " +
+           Num::format(j.axis[2]) + "\"/>");
+  }
+  if (j.type == JointType::Revolute || j.type == JointType::Prismatic) {
+    w.line("<limit lower=\"" + m.n(j.lower) + "\" upper=\"" + m.n(j.upper) + "\" effort=\"" +
+           m.n(j.effort) + "\" velocity=\"" + m.n(j.velocity) + "\"/>");
+  }
+  w.close("</joint>");
+}
+
+void emitPart(Writer& w, const Mode& m, const Part& p) {
+  for (const auto& l : p.links) emitLink(w, m, l);
+  if (!p.links.empty() && !p.joints.empty()) w.blank();
+  for (const auto& j : p.joints) emitJoint(w, m, j);
+}
+
+void emitMaterials(Writer& w, const Robot& r) {
+  for (const auto& mat : r.materials) {
+    w.open("<material name=\"" + mat.name + "\">");
+    w.line("<color rgba=\"" + Num::format(mat.r) + " " + Num::format(mat.g) + " " +
+           Num::format(mat.b) + " " + Num::format(mat.a) + "\"/>");
+    w.close("</material>");
+  }
+}
+
+std::string header(const Robot& r, bool xacro) {
+  std::string s = "<?xml version=\"1.0\"?>\n";
+  if (xacro) {
+    s += "<!-- Generated by urdf_generator. Edit the properties to resize the robot, then run:\n"
+         "       xacro " + r.name + ".xacro > " + r.name + ".urdf -->\n";
+    s += "<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\" name=\"" + r.name + "\">\n";
+  } else {
+    s += "<!-- Generated by urdf_generator (flat URDF, ROS 2 compatible). -->\n";
+    s += "<robot name=\"" + r.name + "\">\n";
+  }
+  return s;
+}
+
+std::string instanceLabel(const MacroInstance& inst) {
+  auto it = inst.args.strs.find("prefix");
+  return it != inst.args.strs.end() ? inst.macro + ": " + it->second : inst.macro;
+}
+
+void emitInertiaMacros(Writer& w, const std::set<Geometry::Kind>& kinds) {
+  if (kinds.count(Geometry::Kind::Box)) {
+    w.open("<xacro:macro name=\"box_inertia\" params=\"m x y z\">");
+    w.line("<inertia ixx=\"${m*(y*y+z*z)/12.0}\" ixy=\"0\" ixz=\"0\" "
+           "iyy=\"${m*(x*x+z*z)/12.0}\" iyz=\"0\" izz=\"${m*(x*x+y*y)/12.0}\"/>");
+    w.close("</xacro:macro>");
+  }
+  if (kinds.count(Geometry::Kind::Cylinder)) {
+    w.open("<xacro:macro name=\"cylinder_inertia\" params=\"m r h\">");
+    w.line("<inertia ixx=\"${m*(3*r*r+h*h)/12.0}\" ixy=\"0\" ixz=\"0\" "
+           "iyy=\"${m*(3*r*r+h*h)/12.0}\" iyz=\"0\" izz=\"${m*r*r/2.0}\"/>");
+    w.close("</xacro:macro>");
+  }
+  if (kinds.count(Geometry::Kind::Sphere)) {
+    w.open("<xacro:macro name=\"sphere_inertia\" params=\"m r\">");
+    w.line("<inertia ixx=\"${2.0*m*r*r/5.0}\" ixy=\"0\" ixz=\"0\" "
+           "iyy=\"${2.0*m*r*r/5.0}\" iyz=\"0\" izz=\"${2.0*m*r*r/5.0}\"/>");
+    w.close("</xacro:macro>");
+  }
+}
+
+}  // namespace
+
+std::string emitXacro(const Robot& r) {
+  const Mode m{true};
+  Writer w;
+  w.indent(1);
+
+  // Properties
+  bool first = true;
+  for (const auto& p : r.properties) {
+    if (p.isHeader) {
+      if (!first) w.blank();
+      w.line("<!-- ===== " + p.comment + " ===== -->");
+    } else {
+      std::string s = "<xacro:property name=\"" + p.name + "\" value=\"" + p.value.xacro() + "\"/>";
+      if (!p.comment.empty()) s += "  <!-- " + p.comment + " -->";
+      w.line(s);
+    }
+    first = false;
+  }
+
+  // Materials
+  if (!r.materials.empty()) {
+    w.blank();
+    w.line("<!-- ===== Materials ===== -->");
+    emitMaterials(w, r);
+  }
+
+  // Which inertia macros are needed?
+  std::set<Geometry::Kind> kinds;
+  for (const auto& l : r.flatten().links) {
+    if (l.hasBody) kinds.insert(l.geometry.kind);
+  }
+  if (!kinds.empty()) {
+    w.blank();
+    w.line("<!-- ===== Inertia helpers ===== -->");
+    emitInertiaMacros(w, kinds);
+  }
+
+  // Macros
+  for (const auto& d : r.macros) {
+    w.blank();
+    std::string params;
+    for (const auto& s : d.strParams) params += (params.empty() ? "" : " ") + s;
+    for (const auto& n : d.numParams) params += (params.empty() ? "" : " ") + n;
+    w.open("<xacro:macro name=\"" + d.name + "\" params=\"" + params + "\">");
+    emitPart(w, m, r.macroBody(d));
+    w.close("</xacro:macro>");
+  }
+
+  // Fixed part of the robot
+  w.blank();
+  w.line("<!-- ===== Robot ===== -->");
+  emitPart(w, m, r.root);
+
+  // Instances
+  if (!r.instances.empty()) w.blank();
+  for (const auto& inst : r.instances) {
+    const MacroDef& d = r.findMacro(inst.macro);
+    std::string s = "<xacro:" + inst.macro;
+    for (const auto& k : d.strParams) s += " " + k + "=\"" + inst.args.str(k) + "\"";
+    for (const auto& k : d.numParams) s += " " + k + "=\"" + inst.args.num(k).xacro() + "\"";
+    w.line(s + "/>");
+  }
+
+  return header(r, true) + w.str() + "</robot>\n";
+}
+
+std::string emitUrdf(const Robot& r) {
+  const Mode m{false};
+  Writer w;
+  w.indent(1);
+
+  emitMaterials(w, r);
+  if (!r.materials.empty()) w.blank();
+  emitPart(w, m, r.root);
+  for (const auto& inst : r.instances) {
+    w.blank();
+    w.line("<!-- " + instanceLabel(inst) + " -->");
+    emitPart(w, m, r.expand(inst));
+  }
+  return header(r, false) + w.str() + "</robot>\n";
+}
+
+}  // namespace urdfgen

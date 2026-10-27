@@ -1,213 +1,205 @@
-# gz_bridge_helper
+# urdf_generator
 
-A Qt6 tool and ROS 2 (Jazzy) colcon package that takes a **URDF** (and optional YAML files),
-works out which Gazebo systems and sensors the model needs, and writes a small ROS 2 package that
-loads the model into **Gazebo Harmonic** with the right `ros_gz_bridge` configuration, so the
-right messages are echoed in both directions. It can then build the package, launch it, and check
-every bridged topic: pass or fail per row.
+A Qt6 GUI and ROS 2 (Jazzy) colcon package that asks for the dimensions of a robot and
+generates both a **xacro** file and a flat **URDF** for it. Visuals are plain URDF
+primitives (boxes, cylinders, spheres). Every link also gets a matching collision shape
+and an inertia computed from its shape and mass, so the model works in simulators too.
 
-It is the second tool next to `urdf_generator` and is separate from it: it reads any URDF, not
-only the ones that tool writes.
+## Supported robots and what you are asked for
 
-## What it takes away, and what it does not
+| Robot | Inputs |
+|---|---|
+| Hexapod | coxa / femur / tibia lengths, distance of the six leg mounts from the centre, body height, link thickness, masses, joint limits |
+| Arm linkage system | number of links; for each link: revolute or sliding, axis (X/Y/Z), **Cartesian (x, y, z) or Polar (r, θ, z)** offset from the previous frame, limits, mass; tool-frame offset |
+| Differential drive | chassis shape (square or circular) and size, wheel radius / width, wheel position **x y z** from the centre, optional front/rear ball casters, **Standard or Mecanum for each wheel** |
+| 4-wheeled | chassis, wheel radius / width, position x y z of the front-left wheel (the other three mirror it), **Standard or Mecanum for each wheel** |
+| Ackermann drive | chassis, wheel radius / width, wheelbase, track width, steering limit; rear wheels driven, front wheels steered, **Standard or Mecanum for each wheel** |
+| Quadruped | body size, hip distance from the centre (x and y), link lengths of the 3-joint legs |
+| Biped | torso size, hip offset from the centre, thigh / shank lengths, foot size |
 
-It takes away the chores that show no robotics skill: writing the world file, the
-`<gazebo>` plugin blocks, the sensor SDF, the bridge YAML with the right message-type pairs, the
-launch file that wires them together.
+**Sensors:** every robot type can also carry sensors (see "Sensors" below).
 
-It does not write your controllers, kinematics, state estimation or any C++/Python for you.
-Everything it generates is ordinary, readable text with comments saying why each line is there
-(open the tabs in the window, or the files in the package), and your URDF is never modified.
-The numbers it measures (wheel separation, wheel radius, steering limit) are shown with the
-reason, so you can check them against your own derivation.
+**Mecanum wheels:** on the three wheeled robots the "Wheel type" group has a Standard / Mecanum
+choice for every wheel (and "All standard" / "All mecanum" buttons), so you can mix them, plus the
+number of rollers (3 to 16, default 8). A mecanum wheel is a hub with barrel-shaped rollers fixed
+round its rim, each roller turned 45° to the axle and lying in the tangent plane of the rim. The
+hub keeps the name of the plain wheel (`front_left_wheel_link` / `front_left_wheel_joint`), so
+swapping a wheel does not move it or change its joint. The rollers are extra links named
+`front_left_roller_1_link` ... with fixed joints (`..._roller_1_joint`) and take 40 % of the wheel
+mass between them. Their size follows the wheel width (roller radius = width / 4), and the xacro
+has the derived properties (`roller_radius`, `roller_length`, `hub_radius`, ...) for tweaking.
 
-## Build and run
+The slant of the rollers is chosen from where the wheel sits, so that the rollers touching the
+ground point towards the middle of the robot (the layout that mecanum drive kinematics assume):
+front-left and rear-right wheels one way, front-right and rear-left the other. In the xacro this
+is the `hand` argument of the `mecanum_wheel` macro (+1 or -1); flip it if you mount a wheel the
+other way round. For the differential drive the wheel counts as a front wheel when its x is 0 or
+more and as a rear wheel when it is negative. Seen from above you see the top of each wheel,
+whose rollers slant the opposite way to the ones on the ground.
+
+Legs have three joints each (hexapod/quadruped: coxa, femur, tibia; biped: hip, knee, ankle).
+The GUI shows a **3D view** of the robot that updates as you type, the xacro and URDF text,
+a tree of the links and joints, and lists any problems (missing mass, lower limit above upper
+limit, ...). Saving is disabled while there are errors.
+
+3D view controls: drag to orbit, right-drag (or Shift-drag) to pan, mouse wheel to zoom,
+double-click to reset. The buttons above it jump to an isometric, front, side or top view, and
+"Link frames" draws the x (red), y (green) and z (blue) axes of every link as thin lines;
+"Sensor axes" (on by default) draws the frame of every sensor, see below. The grid
+lies on the lowest point of the robot (the ground, for the wheeled robots) and its red and green
+lines are the world x and y axes. The camera stays put while you edit, so you can see a
+dimension change against the grid; it only zooms out by itself if the robot grows out of view
+and you have not moved the camera. The view is rendered in software, so it needs no OpenGL
+and also works over SSH or in a VM.
+
+**Joint sliders:** the panel beside the 3D view has a slider and a number box for every movable
+joint (degrees for revolute and continuous joints, metres for sliding ones), so you can pose
+the robot and check that legs, arms and steering move the way you meant. Each slider covers
+the joint's limits, and the joints of one leg, wheel or arm are grouped. "Reset pose" puts every
+joint back at zero. The pose is kept while you edit dimensions, so you can lengthen a link and
+watch the posed robot change, and is forgotten when you switch robot type. It is for looking
+only: the generated xacro and URDF never depend on it. Wheels are plain cylinders, so a
+turning wheel is only visible with "Link frames" on. If the robot swings out of view the
+camera backs away; it never zooms back in or re-aims on its own, and never touches a view you
+framed yourself. Untick "Joint sliders" above the view to hide the panel.
+
+## Sensors
+
+Every robot page ends with a **Sensors** box. Pick a type (camera, IMU, LiDAR, GPS or odometry)
+and press **Add sensor**; each robot type keeps its own list, and a robot can have any number of
+sensors. For each sensor you choose:
+
+- **Name** (letters, digits and `_`). The generated link is `<name>_link` and its joint
+  `<name>_joint`. A new sensor is called `camera`, `camera_2`, ... and is renamed along when you
+  change its type, unless you gave it a name of your own.
+- **Mounted on**: any link of the robot (mecanum rollers are left out; mount on the wheel hub).
+  The sensor is attached at the **root** of that link, which is the origin of the link's frame,
+  where its joint is.
+- **Distance**: a slider and a number box that move the sensor **along the link**, from the root.
+  The direction is the link's own axis: a rod's axis, the longest side of a box, `z` for a ball.
+  It points from the root towards the body, so a leg link runs from its joint to its tip, and the
+  range is the length of the link. A body that is centred on its root (a wheel, a chassis) can
+  be slid both ways. A bare frame has no length, so the slider is disabled there. If you shorten
+  a link below the distance you asked for, the sensor stays at the end of the link and goes back
+  to your distance when the link is long enough again.
+- **Offset** x / y / z: an extra shift on top of the distance, in the frame of the link.
+- **Rotation** roll / pitch / yaw in degrees (URDF `rpy`), relative to the link's frame. At zero
+  the sensor's x axis points along the link's x axis.
+
+Choosing a different link puts the sensor at the root of the new link (distance and offsets back
+to zero) and keeps its rotation. A new sensor starts on top of the main body (`base_link`).
+
+**What is generated.** A sensor is a small link with a fixed joint to the link it is mounted on,
+with visual, collision and inertial like every other link: a box for a camera and an IMU, a
+cylinder for a LiDAR, a flat cylinder for a GPS and a thin disc for odometry, each in its own
+colour. Its frame follows REP 103: x forward, y left, z up. A camera also gets a
+`<name>_optical_frame` (z forward, x right, y down, the convention of image pipelines) as a
+child. In the xacro the placement is a group of properties per sensor
+(`sensor_<name>_distance`, `_offset_x/y/z`, `_roll`, `_pitch`, `_yaw`), so you can move a
+sensor by editing a number; the plain URDF has the resolved values.
+
+**The sensor axes in the 3D view.** The frame of each sensor is drawn as three **thick,
+outlined arrows with arrow heads** and `x` `y` `z` letters, a dot at its origin, a name tag in
+the colour of the sensor type, and a dashed line back to the root of the link it is mounted on
+(a ring marks the root). Link frames are only thin plain lines, and the "Link frames" overlay
+does not draw the sensor frames, so the two cannot be mistaken for each other. The arrows turn
+with the sensor and move with the joint sliders. Untick "Sensor axes" to hide them.
+
+## Build
+
+On Ubuntu 24.04 with ROS 2 Jazzy:
 
 ```bash
 cd ~/ros2_ws/src
-cp -r /path/to/gz_bridge_helper .
+cp -r /path/to/urdf_generator .
 cd ~/ros2_ws
-sudo apt install qt6-base-dev libtinyxml2-dev libyaml-cpp-dev ros-jazzy-ros-gz
-colcon build --packages-select gz_bridge_helper
+rosdep install --from-paths src --ignore-src -y     # pulls in qt6-base-dev, xacro, rviz2, ...
+colcon build --packages-select urdf_generator
 source install/setup.bash
-
-ros2 run gz_bridge_helper gz_bridge_helper_gui                    # the window
-ros2 run gz_bridge_helper gz_bridge_helper_gui robot.urdf a.yaml  # with files already open
-ros2 run gz_bridge_helper gz_bridge_helper_cli robot.urdf --list  # no window, see below
 ```
 
-Without ROS (plain CMake) it builds too: `cmake -S . -B build && cmake --build build && ctest --test-dir build`.
-Qt6 is only needed for the window; `-DGZBH_BUILD_GUI=OFF` builds the command line tool alone.
+Without ROS (just the generator and GUI): `sudo apt install qt6-base-dev cmake g++`, then
+`cmake -S . -B build && cmake --build build`.
 
-## Using the window
+## Use
 
-The layout follows `urdf_generator`: inputs on the left, results on the right.
-
-**Left**
-1. **URDF**: Open (or drop the file on the window). The summary shows links, joints and root.
-   Plain URDF only: run `xacro` first if you have a xacro (the helper tells you).
-2. **YAML files (optional)**: Add as many as you like; each is classified by what is inside
-   (see "YAML files"). "Save overrides template..." writes a commented example to start from.
-3. **Names and spawn pose**: package, model and world name, spawn x/y/z/yaw. Empty fields use the
-   default shown in grey. Values typed here win over every YAML file.
-4. **Detected (tick what to add)**: what the helper suggests, grouped as Sensors, Drive, Joints,
-   Odometry, ros2_control. Click an item to read why it is suggested. Items marked "in the URDF"
-   are already there and only get bridged; "will be added" goes into the *copy* of your URDF.
-   Nothing is added unless it is ticked.
-
-**Right, top:** the **bridged topics** as a table: ROS topic, direction (← Gazebo to ROS,
-→ ROS to Gazebo, ↔ both), Gazebo topic, what it carries, both message types, and where the
-entry came from (generated or which YAML file). Hover a row for details.
-
-**Right, bottom:** tabs with the generated files (**Bridge YAML**, **Launch**, **World**,
-**URDF changes** = only the lines added, **URDF** = the full copy, **Package files**), and the
-**Run** tab. Below: the problems found (errors, warnings, information), then Copy and Save.
-Saving is disabled while there are errors.
-
-*File menu:* Open URDF (Ctrl+O), Add YAML (Ctrl+Shift+O), Reload (F5: reads the files again and
-keeps your ticks), Save package (Ctrl+S), Save bridge YAML (Ctrl+Shift+S).
-
-### The Run tab
-
-1. **Workspace**: your colcon workspace (for example `~/ros2_ws`). Leave it empty when the package
-   is already built and sourced in the terminal you started the window from.
-2. **Build** writes the package to `<workspace>/src/<package>` and runs
-   `colcon build --packages-select <package>`.
-3. **Launch** runs `ros2 launch <package> sim.launch.py` (after sourcing the workspace). Untick
-   "Gazebo window" for a headless run (`gui:=false`). **Stop** sends Ctrl-C to the whole launch.
-4. **Check topics** (or tick "Check after N s" to do it by itself once Gazebo had time to start):
-   - `ros2 topic list -t`: is the topic there, with the right message type?
-   - Gazebo to ROS topics: `ros2 topic hz` listens for a few seconds; messages must arrive.
-   - ROS to Gazebo topics: someone must be subscribed (`ros2 topic info`), then a harmless
-     all-zero message is published while `gz topic -e -n 1` listens on the Gazebo side.
-   - Every row ends as **Pass**, **Fail** (with the reason) or **Skipped** (no safe test message
-     for that type, or cancelled).
-   "Show the same commands for a terminal" lists what the buttons run, so you can do it by hand.
-
-If you change the plan while Gazebo is running, the table keeps describing what was launched and
-says so; stop and launch again to use the new plan.
-
-## What is detected
-
-| Item id | What | How |
-|---|---|---|
-| `sensor:<name>` | camera, IMU, lidar, GPS/GNSS | `<gazebo><sensor>` blocks already in the URDF, or links named like them (`camera`, `imu`, `lidar`/`laser`/`scan`, `gps`/`gnss`/`navsat`) |
-| `sensortopic:<name>` | a `<topic>` for an existing sensor that has none | Gazebo names it after how sdformat lumps links, which you cannot predict, so one is written |
-| `drive:diff` | DiffDrive (several wheels per side = skid steering) | continuous/revolute joints with a horizontal axis whose name or link says wheel/tire, or that carry a cylinder or sphere; left/right by REP-103 (+y is left) |
-| `drive:mecanum` | MecanumDrive | exactly four wheels, all with rollers (links with a name containing `roller`) |
-| `drive:ackermann` | AckermannSteering | two vertical steering joints above the wheels; driven wheels are the unsteered ones |
-| `joint_states` | JointStatePublisher → `/joint_states` | any movable joint |
-| `jointpos:<joint>` | JointPositionController (command with a `Float64`) | movable joints that are not wheels |
-| `odometry` | OdometryPublisher | only offered when there is no drive |
-| `ros2control:plugin`, `ros2control:hardware` | `gz_ros2_control` plugin / hardware plugin | when the URDF has a `<ros2_control>` section |
-
-Measured from the URDF's forward kinematics: wheel separation, wheel base, kingpin width,
-steering limit (from the joint limits) and wheel radius (how far the surface of the wheel's
-cylinders and spheres, and of what is fixed to it such as mecanum rollers, reaches from the
-axle). Warnings: wheel axle not +y, mixed mecanum and ordinary wheels, wheels of different radii.
-
-## Topic names
-
-Gazebo topics are scoped to the model; ROS topics are the plain names you would expect.
-
-| ROS | Gazebo | Type |
-|---|---|---|
-| `/clock` (always) | `/clock` | `rosgraph_msgs/Clock` |
-| `/cmd_vel` | `/model/<model>/cmd_vel` | `geometry_msgs/Twist` |
-| `/odom` | `/model/<model>/odometry` | `nav_msgs/Odometry` |
-| `/tf` | `/model/<model>/tf` | `tf2_msgs/TFMessage` |
-| `/joint_states` | `/model/<model>/joint_state` | `sensor_msgs/JointState` |
-| `/joint/<joint>/cmd_pos` | `/model/<model>/joint/<joint>/cmd_pos` | `std_msgs/Float64` |
-| `/<sensor>/image_raw`, `/<sensor>/camera_info` | `/model/<model>/sensor/<sensor>/image`, `.../camera_info` | `Image`, `CameraInfo` |
-| `/<sensor>/data` (IMU) | `/model/<model>/sensor/<sensor>/imu` | `sensor_msgs/Imu` |
-| `/<sensor>/scan`, `/<sensor>/points` (lidar) | `.../scan`, `.../scan/points` | `LaserScan`, `PointCloud2` |
-| `/<sensor>/fix` (GPS) | `.../navsat` | `sensor_msgs/NavSatFix` |
-
-Sensors that already have a `<topic>` in the URDF keep their Gazebo topic. The ROS name of any
-of them can be changed with `ros_topic:` in an overrides file. Camera entries set the header's
-`frame_id` to the optical frame; the other sensors to their link.
-
-## YAML files
-
-Each file may be one or more of these kinds, told apart by content:
-
-* **ros2_control controllers**: a `controller_manager` section. The helper checks it against the
-  URDF (unknown joint names with a "did you mean", command and state interfaces, update rate vs
-  the physics step), copies the file into the package and starts the controllers with spawners.
-  In this mode only `/clock` and the sensors go through the bridge; commands and joint states
-  come from the controllers.
-* **Existing ros_gz_bridge config**: a list of `topic_name` / `ros_topic_name`+`gz_topic_name`,
-  `ros_type_name`, `gz_type_name`, `direction`, ... Entries are validated the way `ros_gz_bridge`
-  would read them (it silently skips bad ones). Valid entries are added to the bridge and
-  replace a generated entry for the same ROS topic.
-* **Overrides**: this helper's own settings. "Save overrides template..." writes one with every
-  key and a comment; unknown keys are reported with a suggestion. Keys: `package_name`,
-  `model_name`, `use_sim_time`, `world` (`name`, `step_size`, `gravity`, `spherical_coordinates`),
-  `spawn` (`x y z roll pitch yaw`), `sensors.<name>` (`enabled`, `ros_topic`, `frame_id`,
-  `update_rate`, `width`, `height`, `horizontal_fov`, `samples`, `range_min`, `range_max`),
-  `drive` (`enabled`, `wheel_separation`, `wheel_radius`, `ros_cmd_vel_topic`, `ros_odom_topic`,
-  `max_linear_velocity`, `max_angular_velocity`), `joints` (`state_publisher`, `position_control`,
-  `p_gain`, `i_gain`, `d_gain`), `bridge` (extra entries), `exclude` (ROS topics to leave out).
-
-Later files win key by key. A spawn height is computed from the lowest shape of the URDF unless
-`spawn.z` is given.
-
-## The generated package
-
-```
-<package>/
-  package.xml  CMakeLists.txt  README.md
-  launch/sim.launch.py            Gazebo + robot_state_publisher + spawn + parameter_bridge
-  config/<package>_bridge.yaml    the bridge entries, each with a comment saying what it carries
-  worlds/<world>.sdf              physics, the systems the sensors need, ground, light
-  urdf/<model>.urdf               your URDF + the added <gazebo> blocks (marked with a banner)
+```bash
+ros2 run urdf_generator urdf_generator_gui                 # the GUI
+ros2 launch urdf_generator view_robot.launch.py model:=$HOME/hexapod.xacro   # view in RViz
+ros2 run urdf_generator urdf_generator_cli all /tmp/robots # default model of every type, no GUI
 ```
 
-Your original is recoverable by removing the marked block (and the `<topic>` lines it lists); the
-tests check that the copy is the original plus insertions only. `package://` mesh paths work: the
-launch file adds each mesh package's parent folder to `GZ_SIM_RESOURCE_PATH`. Fill in the
-maintainer line in `package.xml` before you publish it.
+`view_robot.launch.py` accepts a `.xacro` or a `.urdf`, starts `robot_state_publisher`, RViz and
+`joint_state_publisher_gui` (sliders for every joint; `gui:=false` for none).
 
-## Command line
+**Using the xacro:** open it and change the `<xacro:property>` values at the top to resize the
+robot, then `xacro hexapod.xacro > hexapod.urdf`. Legs and wheels are `<xacro:macro>`s that are
+instantiated at the bottom of the file. The `.urdf` the GUI writes is already resolved and
+loads directly.
 
-```
-gz_bridge_helper_cli robot.urdf [more.yaml ...] [--out DIR] [--list] [--only id,id] [--without id,id]
-```
-`--list` prints the detected items (ticked ones marked `[x]`), the bridge as
-`ROS <topic> <-/->/<-> GZ <topic>` and the problems; `--out DIR` writes `DIR/<package>`.
-Exit code 1 if there are errors.
+## Conventions
+
+- Metres, kilograms, seconds. The GUI takes angles in degrees; files contain radians.
+- +x forward, +y left, +z up. `base_link` is at the centre of the body or chassis.
+- Wheeled robots also have a `base_footprint` frame on the ground; the model is placed so the
+  wheels (and casters) touch z = 0.
+- Wheels roll about their local y axis; a mecanum wheel's hub does the same and its rollers are fixed to it.
+- Hexapod: `leg1` points along +x and legs go counter-clockwise every 60°. With all joints at
+  zero the coxa and femur stick out horizontally and the tibia hangs straight down.
+- Quadruped and biped: with all joints at zero the legs hang straight down. The biped knee
+  bends backwards from 0 up to its limit.
+- Arm: `link_1 … link_N` with `joint_1 … joint_N`, and a `tool0` frame at the end. Each link is
+  drawn as a rod from its own joint to the next joint (or to the tool frame). Polar θ is measured
+  from the previous frame's +x axis about +z.
+- Inertia uses the solid-body formulas for the link's primitive shape, about the shape's centre.
+- Sensors: x forward, y left, z up (REP 103). A camera's `_optical_frame` is z forward, x right, y down.
+  The "root" of a link is the origin of its frame; "distance" is measured from it along the link.
 
 ## Tests
 
-`ctest --test-dir build` (or `colcon test`) runs:
+```bash
+colcon test --packages-select urdf_generator && colcon test-result --verbose
+```
 
-* `core`: about 1,180 checks of parsing, classification, detection, planning, the emitters and the
-  logic that reads `ros2 topic` output, on hand-written URDFs and on every robot that
-  `urdf_generator` can make (12 of them).
-* `gui`: drives the real window offscreen, including Build, Launch, Stop and Check topics against
-  stand-ins for `ros2`, `gz` and `colcon` (`test/mock_bin`), with real processes and process groups.
-* `generated_packages`: every generated package is checked with `xmllint`, `check_urdf`, PyYAML
-  and a Python compile, and the patched URDF is diffed against the original.
-* `drive_numbers_cross_check`: wheel separation, base, kingpin width, steering limit and radius
-  are recomputed from the URDF with `yourdfpy` and compared with what is in the plugins.
+- `core`: unit tests of the generator (numbers, inertia, every robot, validation) and of the
+  3D scene and renderer (mesh orientation, forward kinematics, joint poses and limits, camera,
+  z-buffer, clipping).
+- `gui`: drives the real window without a display (checks the GUI defaults equal the library
+  defaults and exercises arm links, Cartesian/Polar conversion, chassis shape, errors, saving,
+  and the 3D view: live updates, mouse orbit / pan / zoom / reset, presets, frames, joint sliders).
+- `xacro_matches_urdf*`: expands every generated xacro with the real `xacro` tool and checks it
+  matches the flat URDF exactly (36 models, including unusual settings and sensors).
+- The mecanum wheels are covered by `core` (roller positions, 45° slant, tangent plane, handedness per
+  wheel, ground contact for 3 to 16 rollers, masses, rigid under steering and wheel turning) and by
+  `gui` (the choices, the exact text, errors); mixed-wheel robots are part of the xacro / URDF /
+  `check_urdf` / `scene_matches_urdf_fk` checks below.
+- Sensors are covered by `core` (the axis and range of every kind of link, placement maths, the
+  optical frame, following the joints, xacro properties, materials, bad / repeated / clashing
+  names, unknown links, a sensor on every link of every robot) and by `gui` (adding and removing,
+  the link list and slider ranges, remembering a distance, a link that disappears, per-page
+  lists, the overlay and its switch). Seven models with sensors on legs, tilted and sliding arm
+  links, steered and mecanum wheels and a biped take part in the xacro / URDF / `check_urdf` /
+  `scene_matches_urdf_fk` checks below.
+- `scene_matches_urdf_fk`: when `yourdfpy` is installed, loads every generated URDF with it and
+  checks that the 3D view's link poses and overall bounds agree, both with every joint at zero
+  and with every joint moved to a different value.
+- `check_urdf`: runs urdfdom's `check_urdf` on every generated URDF when it is installed.
 
-The last two are only registered when `python3-yaml` / `yourdfpy` are installed.
+## Not included
 
-## Known limits
+- No `ros2_control` or Gazebo tags, no joint damping or friction. Add them to the xacro by hand.
+- Sensors are frames with a small marker body. There is no `<gazebo>` sensor block, no noise or
+  rate settings, no camera intrinsics, and odometry is only a frame (nothing publishes it), so a
+  simulator will not produce data from them until you add the sensor plugins to the xacro.
+  The marker sizes are fixed.
+- Mecanum rollers are fixed to the hub: they give the wheel its shape and mass but cannot spin
+  freely, so a physics simulator will not make the robot slide sideways by itself. Drive a mecanum
+  robot with a mecanum controller or a planar-motion plugin acting on the four wheel joints. The
+  roller count is part of the generated structure, not an xacro property: change it in the GUI.
+  The wheels touch the ground plane to within a millimetre (one roller touches it exactly).
+- The 3D view shows the robot's shape only: no collision shapes, no dynamics, and no check for
+  self-collision when you pose it. Use the launch file to look at the robot in RViz.
 
-* **Targets ROS 2 Jazzy with Gazebo Harmonic** (`ros_gz`, `gz-sim8`, plugin names `gz-sim-*-system`).
-  The names, parameters and message-type pairs were taken from the `ros_gz`, `gz-sim`, `sdformat`
-  and `gz_ros2_control` sources. The sandbox the tool was written in has neither ROS nor
-  Gazebo, so the end-to-end run (a real simulation) is the first thing to try on your machine;
-  the Run tab is there to tell you quickly what is not right.
-* Camera, IMU, lidar (`gpu_lidar`), GPS, magnetometer, air pressure and altimeter sensors are
-  bridged. Depth/RGB-D cameras and other types are reported and left to your own bridge YAML.
-* With "Gazebo window" unticked, Gazebo runs server-only (`-s`). Cameras and lidars still render
-  there, which on a machine without a display or GPU may need `--headless-rendering` in the
-  `gz_args` of `launch/sim.launch.py`.
-* The PID gains for joint position control (`10, 0, 0.5`) are starting values; tune them.
-* Mecanum drive is set up from the plugin's point of view: Gazebo's rollers are not simulated
-  as real contact, so expect idealised sideways motion.
-* The URDF must be plain URDF (no xacro), with one tree of links.
+## License
 
-Apache-2.0.
+Apache-2.0 (see `LICENSE`).

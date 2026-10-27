@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>urdf_generator</name>
+  <version>0.1.0</version>
+  <description>
+    Qt6 tool that asks for the dimensions of a robot (hexapod, arm linkage system,
+    differential drive, 4-wheeled, Ackermann, quadruped, biped) and generates a
+    xacro file and a flat URDF for ROS 2.
+  </description>
+  <maintainer email="muib.akinyele@aol.com">muib.akinyele</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>qt6-base-dev</depend>
+
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
